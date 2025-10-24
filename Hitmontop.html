@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hitmontop - Pokemon WebGL (Translasi Melingkar)</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: white; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+    </style>
+</head>
+<body>
+        
+        <canvas id="glCanvas" width="700" height="600"></canvas>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gl-matrix/2.8.1/gl-matrix-min.js"></script>
+    
+    <script>
+        const canvas = document.getElementById('glCanvas');
+        const gl = canvas.getContext('webgl');
+        
+        if (!gl) {
+            alert('WebGL tidak tersedia di browser Anda!');
+            throw new Error('WebGL not supported');
+        }
+
+        // --- Shader Setup ---
+        const vertexShaderSource = `
+            attribute vec3 aPosition;
+            attribute vec3 aColor;
+            uniform mat4 uModelViewMatrix;
+            uniform mat4 uProjectionMatrix;
+            varying vec3 vColor;
+            
+            void main() {
+                gl_Position = uProjectionMatrix * uModelViewMatrix * vec4(aPosition, 1.0);
+                vColor = aColor;
+            }
+        `;
+
+        const fragmentShaderSource = `
+            precision mediump float;
+            varying vec3 vColor;
+            
+            void main() {
+                gl_FragColor = vec4(vColor, 1.0);
+            }
+        `;
+
+        function compileShader(gl, source, type) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+            
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                console.error('Shader compile error:', gl.getShaderInfoLog(shader));
+                gl.deleteShader(shader);
+                return null;
+            }
+            return shader;
+        }
+
+        const vertexShader = compileShader(gl, vertexShaderSource, gl.VERTEX_SHADER);
+        const fragmentShader = compileShader(gl, fragmentShaderSource, gl.FRAGMENT_SHADER);
+        
+        const program = gl.createProgram();
+        gl.attachShader(program, vertexShader);
+        gl.attachShader(program, fragmentShader);
+        gl.linkProgram(program);
+        
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+            console.error('Program link error:', gl.getProgramInfoLog(program));
+        }
+
+        const aPosition = gl.getAttribLocation(program, 'aPosition');
+        const aColor = gl.getAttribLocation(program, 'aColor');
+        const uModelViewMatrix = gl.getUniformLocation(program, 'uModelViewMatrix');
+        const uProjectionMatrix = gl.getUniformLocation(program, 'uProjectionMatrix');
+
+        // Colors 
+        const BROWN = [0.65, 0.5, 0.35];
+        const LIGHT_BROWN = [0.8, 0.65, 0.5];
+        const BLUE = [0.2, 0.4, 0.7];
+        const DARK_BLUE = [0.15, 0.3, 0.55];
+        const BLACK = [0.0, 0.0, 0.0];
+        const WHITE = [1.0, 1.0, 1.0];
+        const DARK_RED = [0.5, 0.15, 0.15];
+        const CREAM = [0.95, 0.95, 0.85];
+
+        //  Geometri functions 
+        function createSphere(radius, stacks, slices) {
+            const positions = [];
+            const indices = [];
+            for (let i = 0; i <= stacks; i++) {
+                const phi = (i * Math.PI) / stacks;
+                const sinPhi = Math.sin(phi);
+                const cosPhi = Math.cos(phi);
+                for (let j = 0; j <= slices; j++) {
+                    const theta = (j * 2 * Math.PI) / slices;
+                    const sinTheta = Math.sin(theta);
+                    const cosTheta = Math.cos(theta);
+                    const x = cosTheta * sinPhi;
+                    const y = cosPhi;
+                    const z = sinTheta * sinPhi;
+                    positions.push(x * radius, y * radius, z * radius);
+                }
+            }
+            for (let i = 0; i < stacks; i++) {
+                for (let j = 0; j < slices; j++) {
+                    const first = i * (slices + 1) + j;
+                    const second = first + slices + 1;
+                    indices.push(first, second, first + 1);
+                    indices.push(second, second + 1, first + 1);
+                }
+            }
+            return { positions, indices };
+        }
+
+        function createCone(baseRadius, height, slices) {
+            const positions = [];
+            const indices = [];
+            positions.push(0, height, 0); 
+            for (let i = 0; i <= slices; i++) {
+                const angle = (i * 2 * Math.PI) / slices;
+                const x = Math.cos(angle) * baseRadius;
+                const z = Math.sin(angle) * baseRadius;
+                positions.push(x, 0, z); 
+            }
+            for (let i = 1; i <= slices; i++) {
+                indices.push(0, i, i + 1);
+            }
+            const baseCenterIndex = slices + 1; 
+            positions.push(0,0,0); 
+            for (let i = 1; i <= slices; i++) {
+                indices.push(baseCenterIndex, i + 1, i); 
+            }
+            indices[indices.length - 1] = 1;
+
+            return { positions, indices };
+        }
+
+
+        function createEllipsoid(radiusX, radiusY, radiusZ, stacks, slices) {
+            const positions = [];
+            const indices = [];
+            for (let i = 0; i <= stacks; i++) {
+                const phi = (i * Math.PI) / stacks;
+                const sinPhi = Math.sin(phi);
+                const cosPhi = Math.cos(phi);
+                for (let j = 0; j <= slices; j++) {
+                    const theta = (j * 2 * Math.PI) / slices;
+                    const sinTheta = Math.sin(theta);
+                    const cosTheta = Math.cos(theta);
+                    const x = cosTheta * sinPhi * radiusX;
+                    const y = cosPhi * radiusY;
+                    const z = sinTheta * sinPhi * radiusZ;
+                    positions.push(x, y, z);
+                }
+            }
+            for (let i = 0; i < stacks; i++) {
+                for (let j = 0; j < slices; j++) {
+                    const first = i * (slices + 1) + j;
+                    const second = first + slices + 1;
+                    indices.push(first, second, first + 1);
+                    indices.push(second, second + 1, first + 1);
+                }
+            }
+            return { positions, indices };
+        }
+
+        function createCylinder(radius, height, slices) {
+            const positions = [];
+            const indices = [];
+            positions.push(0, height / 2, 0); 
+            for (let i = 0; i <= slices; i++) {
+                const angle = (i * 2 * Math.PI) / slices;
+                const x = Math.cos(angle) * radius;
+                const z = Math.sin(angle) * radius;
+                positions.push(x, height / 2, z);
+            }
+            positions.push(0, -height / 2, 0); 
+            const bottomCenterIndex = positions.length / 3 - 1;
+            for (let i = 0; i <= slices; i++) {
+                const angle = (i * 2 * Math.PI) / slices;
+                const x = Math.cos(angle) * radius;
+                const z = Math.sin(angle) * radius;
+                positions.push(x, -height / 2, z);
+            }
+            const topStartIdx = 1; 
+            const bottomStartIdx = slices + 2; 
+            for (let i = 0; i < slices; i++) {
+                const p1 = topStartIdx + i;
+                const p2 = topStartIdx + i + 1;
+                const p3 = bottomStartIdx + i;
+                const p4 = bottomStartIdx + i + 1;
+                indices.push(p1, p3, p2);
+                indices.push(p2, p3, p4);
+            }
+            for (let i = 0; i < slices; i++) {
+                indices.push(0, topStartIdx + i + 1, topStartIdx + i);
+            }
+            for (let i = 0; i < slices; i++) {
+                indices.push(bottomCenterIndex, bottomStartIdx + i, bottomStartIdx + i + 1);
+            }
+            return { positions, indices };
+        }
+
+        function createMouthFilled() {
+            const positions = [];
+            const indices = [];
+            const segments = 20;
+            const width = 0.25;
+            const height = 0.08;
+            for (let i = 0; i <= segments; i++) {
+                const t = i / segments;
+                const x = (t - 0.5) * width * 2;
+                const y = -height * 4 * Math.pow(t - 0.5, 2);
+                positions.push(x, y, 0);
+            }
+            positions.push(0, 0, 0);
+            const centerIndex = segments + 1;
+            for (let i = 0; i < segments; i++) {
+                indices.push(centerIndex, i, i + 1);
+            }
+            return { positions, indices, drawMode: gl.TRIANGLES };
+        }
+        
+        function createMouthOutline() {
+            const positions = [];
+            const indices = [];
+            const segments = 20;
+            const width = 0.25;
+            const height = 0.08;
+            for (let i = 0; i <= segments; i++) {
+                const t = i / segments;
+                const x = (t - 0.5) * width * 2;
+                const y = -height * 4 * Math.pow(t - 0.5, 2);
+                positions.push(x, y, 0);
+            }
+            for (let i = 0; i <= segments; i++) {
+                indices.push(i);
+            }
+            return { positions, indices, drawMode: gl.LINE_STRIP };
+        }
+
+        function createHairLine() {
+            const positions = [];
+            const indices = [];
+            const segments = 12;
+            const length = 0.25;
+            const curve = 0.04;
+            for (let i = 0; i <= segments; i++) {
+                const t = i / segments;
+                const x = curve * Math.sin(t * Math.PI);
+                const y = -t * length;
+                positions.push(x, y, 0);
+            }
+            for (let i = 0; i <= segments; i++) {
+                indices.push(i);
+            }
+            return { positions, indices, drawMode: gl.LINE_STRIP };
+        }
+
+        // All geometry data
+        let allVertices = [];
+        let allColors = [];
+        let allIndices = [];
+        let indexOffset = 0;
+        let componentTransforms = []; 
+
+        function initializeGeometry() {
+            allVertices = [];
+            allColors = [];
+            allIndices = [];
+            indexOffset = 0;
+            componentTransforms = [];
+        }
+
+        function addGeometry(geometry, color, initialTransform = mat4.create(), drawMode = gl.TRIANGLES) {
+            const { positions, indices } = geometry;
+            const vertexStart = allVertices.length / 3;
+            const indexStart = allIndices.length;
+
+            for (let i = 0; i < positions.length; i += 3) {
+                const vertex = vec3.fromValues(positions[i], positions[i+1], positions[i+2]);
+                vec3.transformMat4(vertex, vertex, initialTransform);
+                allVertices.push(vertex[0], vertex[1], vertex[2]);
+                allColors.push(...color);
+            }
+            
+            for (let i = 0; i < indices.length; i++) {
+                allIndices.push(indices[i] + indexOffset);
+            }
+
+            componentTransforms.push({
+                initialTransform: initialTransform,
+                vertexStart: vertexStart,
+                vertexCount: positions.length / 3,
+                indexStart: indexStart,
+                indexCount: indices.length,
+                drawMode: drawMode
+            });
+            
+            indexOffset += positions.length / 3;
+
+            return componentTransforms.length - 1; 
+        }
+        
+        function buildHitmontop(animationProgress = 0, isKicking = false) {
+            initializeGeometry();
+            
+            let leftLegRotation = -Math.PI / 5; 
+            let rightLegRotation = Math.PI / 5;  
+            let leftFootPitch = 0; 
+            let rightFootPitch = 0;
+
+            if (isKicking) {
+                const KICK_DURATION = 150; 
+                const phase = animationProgress % KICK_DURATION;
+                const kickStrength = Math.PI / 1.5; 
+                
+                if (phase < 33) { 
+                    const t = phase / 33; 
+                    leftLegRotation = -Math.PI / 5 + kickStrength * Math.sin(t * Math.PI);
+                    leftFootPitch = -Math.PI / 2 * t; 
+                } 
+                else if (phase < 66) { 
+                    const t = (phase - 33) / 33;
+                    rightLegRotation = Math.PI / 5 + kickStrength * Math.sin(t * Math.PI);
+                    rightFootPitch = -Math.PI / 2 * t; 
+                    leftLegRotation = -Math.PI / 5; 
+                    leftFootPitch = 0;
+                }
+                else {
+                    leftLegRotation = -Math.PI / 5;
+                    rightLegRotation = Math.PI / 5;
+                }
+            }
+
+            const bodyTransform = mat4.create();
+            mat4.translate(bodyTransform, bodyTransform, [0, -0.1, 0]);
+            mat4.scale(bodyTransform, bodyTransform, [0.5, 0.45, 0.5]);
+            addGeometry(createSphere(1, 20, 20), BLUE, bodyTransform);
+
+            const headTransform = mat4.create();
+            mat4.translate(headTransform, headTransform, [0, 0.5, 0]);
+            mat4.scale(headTransform, headTransform, [0.65, 0.55, 0.65]);
+            addGeometry(createSphere(1, 16, 16), BROWN, headTransform);
+
+            const hatTransform = mat4.create();
+            mat4.translate(hatTransform, hatTransform, [0, 0.98, 0]);
+            addGeometry(createCone(0.7, 0.45, 20), [0.7, 0.55, 0.35], hatTransform);
+
+            // Rambut Kiri
+            const leftHair1Transform = mat4.create();
+            mat4.translate(leftHair1Transform, leftHair1Transform, [-0.55, 0.7, 0.05]);
+            mat4.rotate(leftHair1Transform, leftHair1Transform, -Math.PI / 3.5, [0, 0, 1]);
+            mat4.scale(leftHair1Transform, leftHair1Transform, [0.12, 0.35, 0.10]);
+            addGeometry(createEllipsoid(1, 1, 1, 12, 12), BROWN, leftHair1Transform);
+            const leftHair2Transform = mat4.create();
+            mat4.translate(leftHair2Transform, leftHair2Transform, [-0.52, 0.55, 0.08]);
+            mat4.rotate(leftHair2Transform, leftHair2Transform, -Math.PI / 4, [0, 0, 1]);
+            mat4.scale(leftHair2Transform, leftHair2Transform, [0.13, 0.32, 0.11]);
+            addGeometry(createEllipsoid(1, 1, 1, 12, 12), BROWN, leftHair2Transform);
+            const leftHair3Transform = mat4.create();
+            mat4.translate(leftHair3Transform, leftHair3Transform, [-0.45, 0.42, 0.12]);
+            mat4.rotate(leftHair3Transform, leftHair3Transform, -Math.PI / 5, [0, 0, 1]);
+            mat4.scale(leftHair3Transform, leftHair3Transform, [0.14, 0.30, 0.12]);
+            addGeometry(createEllipsoid(1, 1, 1, 12, 12), BROWN, leftHair3Transform);
+
+            // Garis Rambut Kiri
+            const leftHairLine1Transform = mat4.create();
+            mat4.translate(leftHairLine1Transform, leftHairLine1Transform, [-0.55, 0.78, 0.16]);
+            mat4.rotate(leftHairLine1Transform, leftHairLine1Transform, -Math.PI / 3.5, [0, 0, 1]);
+            addGeometry(createHairLine(), DARK_BLUE, leftHairLine1Transform, gl.LINE_STRIP);
+            const leftHairLine2Transform = mat4.create();
+            mat4.translate(leftHairLine2Transform, leftHairLine2Transform, [-0.52, 0.63, 0.19]);
+            mat4.rotate(leftHairLine2Transform, leftHairLine2Transform, -Math.PI / 4, [0, 0, 1]);
+            addGeometry(createHairLine(), DARK_BLUE, leftHairLine2Transform, gl.LINE_STRIP);
+            const leftHairLine3Transform = mat4.create();
+            mat4.translate(leftHairLine3Transform, leftHairLine3Transform, [-0.45, 0.50, 0.23]);
+            mat4.rotate(leftHairLine3Transform, leftHairLine3Transform, -Math.PI / 5, [0, 0, 1]);
+            addGeometry(createHairLine(), DARK_BLUE, leftHairLine3Transform, gl.LINE_STRIP);
+
+            // Rambut Kanan
+            const rightHair1Transform = mat4.create();
+            mat4.translate(rightHair1Transform, rightHair1Transform, [0.55, 0.7, 0.05]);
+            mat4.rotate(rightHair1Transform, rightHair1Transform, Math.PI / 3.5, [0, 0, 1]);
+            mat4.scale(rightHair1Transform, rightHair1Transform, [0.12, 0.35, 0.10]);
+            addGeometry(createEllipsoid(1, 1, 1, 12, 12), BROWN, rightHair1Transform);
+            const rightHair2Transform = mat4.create();
+            mat4.translate(rightHair2Transform, rightHair2Transform, [0.52, 0.55, 0.08]);
+            mat4.rotate(rightHair2Transform, rightHair2Transform, Math.PI / 4, [0, 0, 1]);
+            mat4.scale(rightHair2Transform, rightHair2Transform, [0.13, 0.32, 0.11]);
+            addGeometry(createEllipsoid(1, 1, 1, 12, 12), BROWN, rightHair2Transform);
+            const rightHair3Transform = mat4.create();
+            mat4.translate(rightHair3Transform, rightHair3Transform, [0.45, 0.42, 0.12]);
+            mat4.rotate(rightHair3Transform, rightHair3Transform, Math.PI / 5, [0, 0, 1]);
+            mat4.scale(rightHair3Transform, rightHair3Transform, [0.14, 0.30, 0.12]);
+            addGeometry(createEllipsoid(1, 1, 1, 12, 12), BROWN, rightHair3Transform);
+
+            // Garis Rambut Kanan
+            const rightHairLine1Transform = mat4.create();
+            mat4.translate(rightHairLine1Transform, rightHairLine1Transform, [0.55, 0.78, 0.16]);
+            mat4.rotate(rightHairLine1Transform, rightHairLine1Transform, Math.PI / 3.5, [0, 0, 1]);
+            addGeometry(createHairLine(), DARK_BLUE, rightHairLine1Transform, gl.LINE_STRIP);
+            const rightHairLine2Transform = mat4.create();
+            mat4.translate(rightHairLine2Transform, rightHairLine2Transform, [0.52, 0.63, 0.19]);
+            mat4.rotate(rightHairLine2Transform, rightHairLine2Transform, Math.PI / 4, [0, 0, 1]);
+            addGeometry(createHairLine(), DARK_BLUE, rightHairLine2Transform, gl.LINE_STRIP);
+            const rightHairLine3Transform = mat4.create();
+            mat4.translate(rightHairLine3Transform, rightHairLine3Transform, [0.45, 0.50, 0.23]);
+            mat4.rotate(rightHairLine3Transform, rightHairLine3Transform, Math.PI / 5, [0, 0, 1]);
+            addGeometry(createHairLine(), DARK_BLUE, rightHairLine3Transform, gl.LINE_STRIP);
+
+            // Mata & Mulut
+            const leftEyeOuterTransform = mat4.create();
+            mat4.translate(leftEyeOuterTransform, leftEyeOuterTransform, [-0.22, 0.58, 0.52]);
+            mat4.scale(leftEyeOuterTransform, leftEyeOuterTransform, [0.15, 0.15, 0.15]);
+            addGeometry(createSphere(1, 12, 12), BLACK, leftEyeOuterTransform);
+            const leftPupilTransform = mat4.create();
+            mat4.translate(leftPupilTransform, leftPupilTransform, [-0.20, 0.61, 0.62]);
+            mat4.scale(leftPupilTransform, leftPupilTransform, [0.08, 0.08, 0.08]);
+            addGeometry(createSphere(1, 8, 8), WHITE, leftPupilTransform);
+            const rightEyeOuterTransform = mat4.create();
+            mat4.translate(rightEyeOuterTransform, rightEyeOuterTransform, [0.22, 0.58, 0.52]);
+            mat4.scale(rightEyeOuterTransform, rightEyeOuterTransform, [0.15, 0.15, 0.15]);
+            addGeometry(createSphere(1, 12, 12), BLACK, rightEyeOuterTransform);
+            const rightPupilTransform = mat4.create();
+            mat4.translate(rightPupilTransform, rightPupilTransform, [0.20, 0.61, 0.62]);
+            mat4.scale(rightPupilTransform, rightPupilTransform, [0.08, 0.08, 0.08]);
+            addGeometry(createSphere(1, 8, 8), WHITE, rightPupilTransform);
+            const mouthFilledTransform = mat4.create();
+            mat4.translate(mouthFilledTransform, mouthFilledTransform, [0, 0.4, 0.59]);
+            addGeometry(createMouthFilled(), DARK_RED, mouthFilledTransform, gl.TRIANGLES);
+            const mouthOutlineTransform = mat4.create();
+            mat4.translate(mouthOutlineTransform, mouthOutlineTransform, [0, 0.4, 0.60]);
+            addGeometry(createMouthOutline(), BLACK, mouthOutlineTransform, gl.LINE_STRIP);
+
+            // Lengan Kanan
+            const rightArmTransform = mat4.create();
+            mat4.translate(rightArmTransform, rightArmTransform, [0.55, 0.0, 0]);
+            mat4.rotate(rightArmTransform, rightArmTransform, Math.PI / 4, [0, 0, 1]);
+            mat4.scale(rightArmTransform, rightArmTransform, [0.08, 0.5, 0.08]);
+            addGeometry(createCylinder(1, 1, 12), BROWN, rightArmTransform);
+            const rightArmStripe1Transform = mat4.create();
+            mat4.translate(rightArmStripe1Transform, rightArmStripe1Transform, [0.62, -0.08, 0]);
+            mat4.rotate(rightArmStripe1Transform, rightArmStripe1Transform, Math.PI / 4, [0, 0, 1]);
+            mat4.scale(rightArmStripe1Transform, rightArmStripe1Transform, [0.09, 0.08, 0.09]);
+            addGeometry(createCylinder(1, 1, 12), WHITE, rightArmStripe1Transform);
+            const rightArmStripe2Transform = mat4.create();
+            mat4.translate(rightArmStripe2Transform, rightArmStripe2Transform, [0.69, -0.21, 0]);
+            mat4.rotate(rightArmStripe2Transform, rightArmStripe2Transform, Math.PI / 4, [0, 0, 1]);
+            mat4.scale(rightArmStripe2Transform, rightArmStripe2Transform, [0.09, 0.08, 0.09]);
+            addGeometry(createCylinder(1, 1, 12), WHITE, rightArmStripe2Transform);
+            const rightHandTransform = mat4.create();
+            mat4.translate(rightHandTransform, rightHandTransform, [0.72, -0.25, 0]);
+            mat4.scale(rightHandTransform, rightHandTransform, [0.13, 0.13, 0.13]);
+            addGeometry(createSphere(1, 10, 10), LIGHT_BROWN, rightHandTransform);
+
+            // Lengan Kiri
+            const leftArmTransform = mat4.create();
+            mat4.translate(leftArmTransform, leftArmTransform, [-0.55, 0.0, 0]);
+            mat4.rotate(leftArmTransform, leftArmTransform, -Math.PI / 4, [0, 0, 1]);
+            mat4.scale(leftArmTransform, leftArmTransform, [0.08, 0.5, 0.08]);
+            addGeometry(createCylinder(1, 1, 12), BROWN, leftArmTransform);
+            const leftArmStripe1Transform = mat4.create();
+            mat4.translate(leftArmStripe1Transform, leftArmStripe1Transform, [-0.62, -0.08, 0]);
+            mat4.rotate(leftArmStripe1Transform, leftArmStripe1Transform, -Math.PI / 4, [0, 0, 1]);
+            mat4.scale(leftArmStripe1Transform, leftArmStripe1Transform, [0.09, 0.08, 0.09]);
+            addGeometry(createCylinder(1, 1, 12), WHITE, leftArmStripe1Transform);
+            const leftArmStripe2Transform = mat4.create();
+            mat4.translate(leftArmStripe2Transform, leftArmStripe2Transform, [-0.69, -0.21, 0]);
+            mat4.rotate(leftArmStripe2Transform, leftArmStripe2Transform, -Math.PI / 4, [0, 0, 1]);
+            mat4.scale(leftArmStripe2Transform, leftArmStripe2Transform, [0.09, 0.08, 0.09]);
+            addGeometry(createCylinder(1, 1, 12), WHITE, leftArmStripe2Transform);
+            const leftHandTransform = mat4.create();
+            mat4.translate(leftHandTransform, leftHandTransform, [-0.72, -0.25, 0]);
+            mat4.scale(leftHandTransform, leftHandTransform, [0.13, 0.13, 0.13]);
+            addGeometry(createSphere(1, 10, 10), LIGHT_BROWN, leftHandTransform);
+
+            // Kaki
+            const LEG_LENGTH = 0.55; 
+            const FOOT_Y_POSITION_FROM_PIVOT = -LEG_LENGTH; 
+
+            // Kaki Kiri
+            const LEFT_HIP_Y = -0.4;
+            const leftLegPivot = mat4.create();
+            mat4.translate(leftLegPivot, leftLegPivot, [-0.25, LEFT_HIP_Y, 0]); 
+            mat4.rotate(leftLegPivot, leftLegPivot, leftLegRotation, [0, 0, 1]); 
+            const leftLegCylinderTransform = mat4.clone(leftLegPivot);
+            mat4.translate(leftLegCylinderTransform, leftLegCylinderTransform, [0.0, -LEG_LENGTH / 2, 0]); 
+            mat4.scale(leftLegCylinderTransform, leftLegCylinderTransform, [0.07, LEG_LENGTH, 0.07]);
+            addGeometry(createCylinder(1, 1, 12), WHITE, leftLegCylinderTransform);
+            const leftFootTransform = mat4.clone(leftLegPivot);
+            mat4.translate(leftFootTransform, leftFootTransform, [0, FOOT_Y_POSITION_FROM_PIVOT, 0]); 
+            mat4.rotate(leftFootTransform, leftFootTransform, leftFootPitch, [1, 0, 0]); 
+            const leftFootBaseTransform = mat4.clone(leftFootTransform); 
+            mat4.scale(leftFootBaseTransform, leftFootBaseTransform, [0.35, 0.32, 0.35]);
+            addGeometry(createSphere(1, 20, 20), DARK_BLUE, leftFootBaseTransform);
+            const leftLeftClawTransform = mat4.clone(leftFootTransform); 
+            mat4.translate(leftLeftClawTransform, leftLeftClawTransform, [-0.10, -0.15, 0.20]); 
+            mat4.rotate(leftLeftClawTransform, leftLeftClawTransform, Math.PI, [1, 0, 0]); 
+            mat4.rotate(leftLeftClawTransform, leftLeftClawTransform, -0.3, [0, 1, 0]); 
+            mat4.scale(leftLeftClawTransform, leftLeftClawTransform, [0.12, 0.3, 0.12]);
+            addGeometry(createCone(1, 1, 16), CREAM, leftLeftClawTransform);
+            const leftRightClawTransform = mat4.clone(leftFootTransform); 
+            mat4.translate(leftRightClawTransform, leftRightClawTransform, [0.10, -0.15, 0.20]); 
+            mat4.rotate(leftRightClawTransform, leftRightClawTransform, Math.PI, [1, 0, 0]); 
+            mat4.rotate(leftRightClawTransform, leftRightClawTransform, 0.3, [0, 1, 0]); 
+            mat4.scale(leftRightClawTransform, leftRightClawTransform, [0.12, 0.3, 0.12]);
+            addGeometry(createCone(1, 1, 16), CREAM, leftRightClawTransform);
+
+            // Kaki Kanan
+            const RIGHT_HIP_Y = -0.4;
+            const rightLegPivot = mat4.create();
+            mat4.translate(rightLegPivot, rightLegPivot, [0.25, RIGHT_HIP_Y, 0]);
+            mat4.rotate(rightLegPivot, rightLegPivot, rightLegRotation, [0, 0, 1]);
+            const rightLegCylinderTransform = mat4.clone(rightLegPivot);
+            mat4.translate(rightLegCylinderTransform, rightLegCylinderTransform, [0.0, -LEG_LENGTH / 2, 0]);
+            mat4.scale(rightLegCylinderTransform, rightLegCylinderTransform, [0.07, LEG_LENGTH, 0.07]);
+            addGeometry(createCylinder(1, 1, 12), WHITE, rightLegCylinderTransform);
+            const rightFootTransform = mat4.clone(rightLegPivot);
+            mat4.translate(rightFootTransform, rightFootTransform, [0, FOOT_Y_POSITION_FROM_PIVOT, 0]);
+            mat4.rotate(rightFootTransform, rightFootTransform, rightFootPitch, [1, 0, 0]);
+            const rightFootBaseTransform = mat4.clone(rightFootTransform);
+            mat4.scale(rightFootBaseTransform, rightFootBaseTransform, [0.35, 0.32, 0.35]);
+            addGeometry(createSphere(1, 20, 20), DARK_BLUE, rightFootBaseTransform);
+            const rightLeftClawTransform = mat4.clone(rightFootTransform); 
+            mat4.translate(rightLeftClawTransform, rightLeftClawTransform, [-0.10, -0.15, 0.20]); 
+            mat4.rotate(rightLeftClawTransform, rightLeftClawTransform, Math.PI, [1, 0, 0]);
+            mat4.rotate(rightLeftClawTransform, rightLeftClawTransform, -0.3, [0, 1, 0]);
+            mat4.scale(rightLeftClawTransform, rightLeftClawTransform, [0.12, 0.3, 0.12]);
+            addGeometry(createCone(1, 1, 16), CREAM, rightLeftClawTransform);
+            const rightRightClawTransform = mat4.clone(rightFootTransform); 
+            mat4.translate(rightRightClawTransform, rightRightClawTransform, [0.10, -0.15, 0.20]); 
+            mat4.rotate(rightRightClawTransform, rightRightClawTransform, Math.PI, [1, 0, 0]);
+            mat4.rotate(rightRightClawTransform, rightRightClawTransform, 0.3, [0, 1, 0]);
+            mat4.scale(rightRightClawTransform, rightRightClawTransform, [0.12, 0.3, 0.12]);
+            addGeometry(createCone(1, 1, 16), CREAM, rightRightClawTransform);
+
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(allVertices), gl.STATIC_DRAW);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(allColors), gl.STATIC_DRAW);
+
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+            gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(allIndices), gl.STATIC_DRAW);
+
+            return 0; 
+        }
+
+        const vertexBuffer = gl.createBuffer();
+        const colorBuffer = gl.createBuffer();
+        const indexBuffer = gl.createBuffer();
+        
+        const RADIUS = 1.0; // Radius lingkaran translasi
+        const SPEED_FACTOR = 0.005; // Kecepatan pergerakan melingkar
+
+        let angle = 0; // Sudut untuk pergerakan melingkar
+        let translationX = 0; 
+        let translationZ = 0; 
+        
+        let rotation = 0; 
+        let kickFrame = 0;
+        const KICK_DURATION = 150; 
+        const IDLE_DURATION = 5000; 
+        let animationTimeoutId = null; 
+        let lastTime = 0;
+
+        function draw(animationProgress = 0, isKickingNow = false) {
+            gl.viewport(0, 0, canvas.width, canvas.height);
+            gl.clearColor(0.88, 0.88, 0.92, 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+            gl.enable(gl.DEPTH_TEST);
+            
+            buildHitmontop(animationProgress, isKickingNow);
+            
+            const projectionMatrix = mat4.create();
+            mat4.perspective(projectionMatrix, Math.PI / 4, canvas.width / canvas.height, 0.1, 100);
+            
+            const modelViewMatrix = mat4.create();
+            mat4.translate(modelViewMatrix, modelViewMatrix, [0, 0, -9]);
+            
+            // Terapkan Translasi Melingkar
+            mat4.translate(modelViewMatrix, modelViewMatrix, [translationX, 0, translationZ]); 
+            
+            mat4.rotate(modelViewMatrix, modelViewMatrix, rotation, [0, 1, 0]); 
+            mat4.rotate(modelViewMatrix, modelViewMatrix, -0.2, [1, 0, 0]); 
+            
+            gl.useProgram(program);
+            
+            gl.uniformMatrix4fv(uProjectionMatrix, false, projectionMatrix);
+            gl.uniformMatrix4fv(uModelViewMatrix, false, modelViewMatrix);
+            
+            gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+            gl.enableVertexAttribArray(aPosition);
+            gl.vertexAttribPointer(aPosition, 3, gl.FLOAT, false, 0, 0);
+            
+            gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+            gl.enableVertexAttribArray(aColor);
+            gl.vertexAttribPointer(aColor, 3, gl.FLOAT, false, 0, 0);
+            
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+            
+            for (let i = 0; i < componentTransforms.length; i++) {
+                const part = componentTransforms[i];
+                
+                if (part.drawMode === gl.LINES || part.drawMode === gl.LINE_STRIP) {
+                    gl.lineWidth(3);
+                }
+                
+                gl.drawElements(part.drawMode, part.indexCount, gl.UNSIGNED_SHORT, part.indexStart * 2);
+            }
+        }
+
+        // Animation loop for Triple Kick 
+        function animateKick(currentTime) {
+            const deltaTime = currentTime - lastTime;
+            lastTime = currentTime;
+            
+            // Rotasi berputar karakter itu sendiri
+            rotation += 0.05; 
+            
+            // Update posisi melingkar (translasi)
+            angle += deltaTime * SPEED_FACTOR;
+            translationX = Math.cos(angle) * RADIUS;
+            translationZ = Math.sin(angle) * RADIUS;
+
+            kickFrame++;
+
+            if (kickFrame > KICK_DURATION) {
+                // Tendangan selesai, reset frame dan mulai jeda
+                kickFrame = 0;
+                draw(0, false); 
+                animationTimeoutId = setTimeout(startNextAnimationCycle, IDLE_DURATION); 
+                return;
+            }
+
+            draw(kickFrame, true); 
+            requestAnimationFrame(animateKick);
+        }
+
+        function startNextAnimationCycle() {
+            // Memulai animasi tendangan dari titik T[N] ke T[N+1]
+            animateKick(performance.now());
+        }
+        
+        // Memulai animasi pertama kali secara otomatis
+        draw(); 
+        animateKick(performance.now());
+    </script>
+</body>
+</html>

@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <title>Tyrogue WebGL</title>
+  <style>
+    html, body { margin:0; height:100%; background:#0f0f12; }
+    canvas { width:100vw; height:100vh; display:block; outline:none; }
+    .hint{
+      position:fixed; left:12px; bottom:12px; color:#cdd;
+      font:12px/1.3 system-ui, sans-serif; opacity:.9; user-select:none;
+      background:#0008; padding:8px 10px; border-radius:8px;
+    }
+    .controls {
+      position:fixed; right:12px; bottom:12px; color:#cdd;
+      font:12px/1.3 system-ui, sans-serif; opacity:.9; user-select:none;
+      background:#0008; padding:8px 10px; border-radius:8px;
+    }
+  
+
+  </style>
+</head>
+<body>
+<canvas id="glcanvas" tabindex="0"></canvas>
+
+
+
+<!-- Shaders -->
+<script id="vs" type="x-shader/x-vertex">
+attribute vec3 a_position;
+attribute vec3 a_normal;
+attribute vec3 a_color;
+
+uniform mat4 u_model, u_view, u_proj;
+uniform mat3 u_normalMat;
+
+varying vec3 v_normal;
+varying vec3 v_color;
+
+void main() {
+  v_normal = normalize(u_normalMat * a_normal);
+  v_color  = a_color;
+  gl_Position = u_proj * u_view * u_model * vec4(a_position, 1.0);
+}
+</script>
+
+<script id="fs" type="x-shader/x-fragment">
+precision mediump float;
+
+varying vec3 v_normal;
+varying vec3 v_color;
+
+uniform vec3 u_lightDir;
+uniform vec3 u_ambient;
+
+void main() {
+  vec3 N = normalize(v_normal);
+  vec3 L = normalize(u_lightDir);
+  float diff = max(dot(N, L), 0.0);
+  vec3 color = v_color * (u_ambient + diff * vec3(0.9,0.9,1.0));
+  gl_FragColor = vec4(color, 1.0);
+}
+</script>
+
+<script>
+/*  Matriks mini  */
+const Mat4 = {
+  I(){ return [1,0,0,0,  0,1,0,0,  0,0,1,0,  0,0,0,1]; },
+  mul(a,b){
+    const r=new Array(16);
+    for(let i=0;i<4;i++){
+      for(let j=0;j<4;j++){
+        r[i*4+j]=a[i*4+0]*b[0*4+j]+a[i*4+1]*b[1*4+j]+a[i*4+2]*b[2*4+j]+a[i*4+3]*b[3*4+j];
+      }
+    }
+    return r;
+  },
+  translate(x,y,z){ const m=this.I(); m[12]=x; m[13]=y; m[14]=z; return m; },
+  scale(x,y,z){ const m=this.I(); m[0]=x; m[5]=y; m[10]=z; return m; },
+  rotX(r){ const c=Math.cos(r),s=Math.sin(r);
+    return [1,0,0,0,  0,c,s,0,  0,-s,c,0,  0,0,0,1]; },
+  rotY(r){ const c=Math.cos(r),s=Math.sin(r);
+    return [c,0,-s,0,  0,1,0,0,  s,0,c,0,  0,0,0,1]; },
+  rotZ(r){ const c=Math.cos(r),s=Math.sin(r);
+    return [c,s,0,0,  -s,c,0,0,  0,0,1,0,  0,0,0,1]; },
+  perspective(fovy,aspect,near,far){
+    const f=1/Math.tan(fovy/2), nf=1/(near-far);
+    return [f/aspect,0,0,0,  0,f,0,0,  0,0,(far+near)*nf,-1,  0,0,(2*far*near)*nf,0];
+  },
+  lookAt(eye,center,up){
+    const zx=eye[0]-center[0], zy=eye[1]-center[1], zz=eye[2]-center[2];
+    const zl=Math.hypot(zx,zy,zz); const z0=zx/zl, z1=zy/zl, z2=zz/zl;
+    let x0=up[1]*z2-up[2]*z1, x1=up[2]*z0-up[0]*z2, x2=up[0]*z1-up[1]*z0;
+    const xl=Math.hypot(x0,x1,x2); x0/=xl; x1/=xl; x2/=xl;
+    const y0=z1*x2-z2*x1, y1=z2*x0-z0*x2, y2=z0*x1-z1*x0;
+    const m=[x0,y0,z0,0,  x1,y1,z1,0,  x2,y2,z2,0,  0,0,0,1];
+    const t=this.translate(-eye[0],-eye[1],-eye[2]);
+    return this.mul(m,t);
+  },
+  normalMatFromModel(m){
+    const a=[m[0],m[1],m[2], m[4],m[5],m[6], m[8],m[9],m[10]];
+    const det=a[0]*(a[4]*a[8]-a[5]*a[7]) - a[1]*(a[3]*a[8]-a[5]*a[6]) + a[2]*(a[3]*a[7]-a[4]*a[6]);
+    const id=1/(det||1);
+    const inv=[
+      (a[4]*a[8]-a[5]*a[7])*id, (a[2]*a[7]-a[1]*a[8])*id, (a[1]*a[5]-a[2]*a[4])*id,
+      (a[5]*a[6]-a[3]*a[8])*id, (a[0]*a[8]-a[2]*a[6])*id, (a[2]*a[3]-a[0]*a[5])*id,
+      (a[3]*a[7]-a[4]*a[6])*id, (a[1]*a[6]-a[0]*a[7])*id, (a[0]*a[4]-a[1]*a[3])*id
+    ];
+    return [inv[0],inv[3],inv[6],  inv[1],inv[4],inv[7],  inv[2],inv[5],inv[8]];
+  }
+};
+
+
+function createSphere(lat=32, lon=32, r=1){
+  const pos=[], nor=[], idx=[];
+  for(let i=0;i<=lat;i++){
+    const th=i*Math.PI/lat, sT=Math.sin(th), cT=Math.cos(th);
+    for(let j=0;j<=lon;j++){
+      const ph=j*2*Math.PI/lon, sP=Math.sin(ph), cP=Math.cos(ph);
+      const x=cP*sT, y=cT, z=sP*sT;
+      pos.push(r*x, r*y, r*z); nor.push(x, y, z);
+    }
+  }
+  for(let i=0;i<lat;i++){
+    for(let j=0;j<lon;j++){
+      const a=i*(lon+1)+j, b=a+lon+1;
+      idx.push(a,b,a+1,  b,b+1,a+1);
+    }
+  }
+  return {positions:pos, newNormals:nor, indices:idx};
+}
+
+function createFrustum(segments=30, rTop=0.10, rBot=0.18, h=0.36){
+  const pos=[], nor=[], idx=[], half=h/2;
+  for(let i=0;i<=segments;i++){
+    const t=i/segments*2*Math.PI, c=Math.cos(t), s=Math.sin(t);
+    pos.push(rTop*c,  half, rTop*s);
+    pos.push(rBot*c, -half, rBot*s);
+    const nx=c, nz=s, ny=(rBot-rTop)/h, L=Math.hypot(nx,ny,nz);
+    nor.push(nx/L,ny/L,nz/L); nor.push(nx/L,ny/L,nz/L);
+  }
+  for(let i=0;i<segments;i++){ const a=i*2,b=a+1,c=a+2,d=a+3; idx.push(a,b,c, b,d,c); }
+  return {positions:pos, newNormals:nor, indices:idx};
+}
+
+function createCylinder(segments=30, radius=0.09, height=0.56){
+  const pos=[], nor=[], idx=[], half=height/2;
+  for(let i=0;i<=segments;i++){
+    const t=i/segments*2*Math.PI, c=Math.cos(t), s=Math.sin(t);
+    pos.push(radius*c,  half, radius*s);
+    pos.push(radius*c, -half, radius*s);
+    nor.push(c,0,s); nor.push(c,0,s);
+  }
+  for(let i=0;i<segments;i++){ const a=i*2,b=a+1,c=a+2,d=a+3; idx.push(a,b,c, b,d,c); }
+  return {positions:pos, newNormals:nor, indices:idx};
+}
+
+
+function transformMesh(mesh, M){
+  const p=mesh.positions, n=mesh.newNormals, tp=[], tn=[], n3=Mat4.normalMatFromModel(M);
+  for(let i=0;i<p.length;i+=3){
+    const x=p[i],y=p[i+1],z=p[i+2];
+    const nx=M[0]*x+M[4]*y+M[8]*z+M[12];
+    const ny=M[1]*x+M[5]*y+M[9]*z+M[13];
+    const nz=M[2]*x+M[6]*y+M[10]*z+M[14];
+    tp.push(nx,ny,nz);
+  }
+  for(let i=0;i<n.length;i+=3){
+    const x=n[i],y=n[i+1],z=n[i+2];
+    const nx=n3[0]*x+n3[3]*y+n3[6]*z, ny=n3[1]*x+n3[4]*y+n3[7], nz=n3[2]*x+n3[5]*y+n3[8];
+    const L=Math.hypot(nx,ny,nz)||1; tn.push(nx/L,ny/L,nz/L);
+  }
+  return {positions:tp, newNormals:tn, indices:mesh.indices.slice()};
+}
+function addColor(mesh, c){
+  const cols=[]; for(let i=0;i<mesh.positions.length/3;i++) cols.push(c[0],c[1],c[2]);
+  return {positions:mesh.positions, newNormals:mesh.newNormals, indices:mesh.indices, colors:cols};
+}
+function recolorCPU(m, c){
+  const cols=[]; for(let i=0;i<m.positions.length/3;i++) cols.push(c[0],c[1],c[2]);
+  return {positions:m.positions, newNormals:m.newNormals, indices:m.indices, colors:col};
+}
+function mergeMeshesColored(ms){
+  const pos=[],nor=[],idx=[],col=[]; let off=0;
+  for(const m of ms){
+    pos.push(...m.positions); nor.push(...m.newNormals); col.push(...m.colors);
+    for(const id of m.indices) idx.push(id+off);
+    off += m.positions.length/3;
+  }
+  return {positions:pos, newNormals:nor, indices:idx, colors:col};
+}
+
+function compileShader(gl,src,type){
+  const s=gl.createShader(type); gl.shaderSource(s,src); gl.compileShader(s);
+  if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+function createProgram(gl,vsSrc,fsSrc){
+  const p=gl.createProgram(), v=compileShader(gl,vsSrc,gl.VERTEX_SHADER), f=compileShader(gl,fsSrc,gl.FRAGMENT_SHADER);
+  gl.attachShader(p,v); gl.attachShader(p,f); gl.linkProgram(p);
+  if(!gl.getProgramParameter(p,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  return p;
+}
+function makeMesh(gl, m){
+  const pb=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,pb); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(m.positions),gl.STATIC_DRAW);
+  const nb=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,nb); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(m.newNormals),gl.STATIC_DRAW);
+  const cb=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,cb); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(m.colors),gl.STATIC_DRAW);
+  const ib=gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array(m.indices),gl.STATIC_DRAW);
+  return {posBuf:pb,norBuf:nb,colBuf:cb,idxBuf:ib,count:m.indices.length};
+}
+
+window.addEventListener('load',()=>{
+  const canvas=document.getElementById('glcanvas');
+  const gl=canvas.getContext('webgl'); if(!gl){alert('WebGL tidak didukung');return;}
+  canvas.addEventListener('pointerdown',()=>canvas.focus());
+
+  function resize(){
+    const dpr=window.devicePixelRatio||1;
+    const w=Math.floor((canvas.clientWidth||window.innerWidth)*dpr);
+    const h=Math.floor((canvas.clientHeight||window.innerHeight)*dpr);
+    if(canvas.width!==w||canvas.height!==h){canvas.width=w; canvas.height=h; gl.viewport(0,0,w,h);}
+  }
+  resize(); window.addEventListener('resize',resize);
+
+  const prog=createProgram(gl,document.getElementById('vs').textContent,document.getElementById('fs').textContent);
+  gl.useProgram(prog);
+  const loc={
+    a_position:gl.getAttribLocation(prog,'a_position'),
+    a_normal:gl.getAttribLocation(prog,'a_normal'),
+    a_color:gl.getAttribLocation(prog,'a_color'),
+    u_model:gl.getUniformLocation(prog,'u_model'),
+    u_view:gl.getUniformLocation(prog,'u_view'),
+    u_proj:gl.getUniformLocation(prog,'u_proj'),
+    u_normalMat:gl.getUniformLocation(prog,'u_normalMat'),
+    u_lightDir:gl.getUniformLocation(prog,'u_lightDir'),
+    u_ambient:gl.getUniformLocation(prog,'u_ambient'),
+  };
+
+  // warna
+  const LAV=[0.71,0.58,0.84], WHITE=[0.98,0.98,0.98], BLACK=[0.06,0.06,0.06], DARKM=[0.20,0.20,0.24], ORANGE=[1.00,0.55,0.00];
+  const BROWN=[0.55,0.35,0.14], BROWN_DK=[0.32,0.20,0.08];
+
+  // Kepala oval
+  const head = addColor(transformMesh(createSphere(32,32,0.55), Mat4.scale(1.18,0.98,1.00)), LAV);
+
+  // 3 tanduk berjejer
+  const fr=createFrustum(30,0.10,0.18,0.36), baseY=0.60;
+  const hornZ=[0.12,0,-0.18], hornTilt=[0.2,-0.18,-0.50];
+  const horns = hornZ.map((z,i)=> addColor(transformMesh(fr, Mat4.mul(Mat4.translate(0,baseY,z), Mat4.rotX(hornTilt[i]))), LAV));
+
+  // Mata + pupil + aksen oranye
+  const eyeBase=createSphere(22,22,0.11), pupBase=createSphere(18,18,0.045), pup2Base=createSphere(18,10,0.075);
+  const eyeX=0.25, eyeY=0.02, eyeZ=0.40;
+  const eL=addColor(transformMesh(eyeBase, Mat4.mul(Mat4.translate(-eyeX,eyeY,eyeZ), Mat4.scale(1.15,1.5,1.0))), WHITE);
+  const eR=addColor(transformMesh(eyeBase, Mat4.mul(Mat4.translate( eyeX,eyeY,eyeZ), Mat4.scale(1.15,1.5,1.0))), WHITE);
+  const pL=addColor(transformMesh(pupBase, Mat4.mul(Mat4.translate(-eyeX*1.3,eyeY-0.005,0.55), Mat4.scale(0.9,1.1,0.9))), BLACK);
+  const pR=addColor(transformMesh(pupBase, Mat4.mul(Mat4.translate( eyeX*1.3,eyeY-0.005,0.55), Mat4.scale(0.9,1.1,0.9))), BLACK);
+  const p2L=addColor(transformMesh(pup2Base, Mat4.mul(Mat4.translate(-eyeX*1.3,eyeY-0.005,0.51), Mat4.scale(0.9,1.1,0.9))), ORANGE);
+  const p2R=addColor(transformMesh(pup2Base, Mat4.mul(Mat4.translate( eyeX*1.3,eyeY-0.005,0.51), Mat4.scale(0.9,1.1,0.9))), ORANGE);
+
+  // Mulut
+  const mouth = addColor(transformMesh(createSphere(18,18,0.07), Mat4.mul(Mat4.translate(0,-0.19,0.49), Mat4.scale(2.9,0.85,0.95))), DARKM);
+
+  // Leher
+  const neck = addColor(transformMesh(createCylinder(30,0.15,0.58), Mat4.translate(0,-0.64,0.05)), LAV);
+// Badan ellipsoid
+  const torso = addColor(transformMesh(createSphere(32,32,0.42), Mat4.mul(Mat4.translate(0,-0.80,0.06), Mat4.scale(0.7,1.3,0.8))), LAV);
+
+  // Celana cokelat
+const hipY1 = -2.1;       
+const hipZ1 =  0.06;      
+const hipSpread = 0.16; 
+const shortsL = addColor(
+  transformMesh(
+    createSphere(32, 32, 0.4),
+    Mat4.mul(
+      Mat4.translate(-hipSpread, hipY1, hipZ1),
+      Mat4.scale(1.02, 0.65, 1.05) 
+    )
+  ),
+  BROWN
+);
+
+const shortsR = addColor(
+  transformMesh(
+    createSphere(32, 32, 0.4),
+    Mat4.mul(
+      Mat4.translate( hipSpread, hipY1, hipZ1),
+      Mat4.scale(1.02, 0.65, 1.05)
+    )
+  ),
+  BROWN
+);
+
+  // Tangan
+  const armCyl=createCylinder(30,0.085,0.79), palmBaseSphere=createSphere(24,24,0.18), shoulderCap=createSphere(24,24,0.17);
+  const shoulderY=-0.85, shoulderX=0.2, shoulderZ=0.05;
+  const shoulderCapInset = 0.11;
+  
+  function fistPieces(root, side){
+    const pieces=[];
+
+    const palmOffsetBack = Mat4.translate(0, 0, -0.2);
+    pieces.push(addColor(transformMesh(
+      palmBaseSphere,
+      Mat4.mul(root, Mat4.mul(palmOffsetBack, Mat4.scale(0.9, 1.0, 1.0)))
+    ), LAV));
+
+    // Buku-buku jari
+    const spacing = 0.095, kZ = 0.30, baseY = 0.02;
+    const arcY  = [-0.002, 0.010, 0.010, -0.002];
+    for (let i = 0; i < 4; i++) {
+      const k = i - 1.5;
+      const T = Mat4.mul(Mat4.translate(k * spacing, baseY + arcY[i], kZ),
+                         Mat4.scale(0.22, 0.10, 0.18));
+      pieces.push(addColor(transformMesh(palmBaseSphere, Mat4.mul(root, T)), LAV));
+    }
+    // Bantalan depan jari
+    const fingerPad = Mat4.mul(Mat4.translate(0, -0.01, 0.16), Mat4.scale(0.35, 0.06, 0.10));
+    pieces.push(addColor(transformMesh(palmBaseSphere, Mat4.mul(root, fingerPad)), LAV));
+
+    // Ibu jari
+    const tX = side>0 ? -0.15 : 0.15;
+    const tRz= side>0 ? -0.6  : 0.6;
+    const thumb = Mat4.mul(Mat4.mul(Mat4.translate(tX,-0.02,0.07), Mat4.rotZ(tRz)), Mat4.scale(0.09,0.07,0.09));
+    pieces.push(addColor(transformMesh(palmBaseSphere, Mat4.mul(root, thumb)), LAV));
+    return pieces;
+  }
+
+  function makeArm(side){ 
+    const rot = Mat4.mul(Mat4.rotZ(side*0.30), Mat4.rotX(-0.10)); 
+    const atShoulder = Mat4.mul(Mat4.translate(side*shoulderX, shoulderY, shoulderZ), rot);
+
+    const cap = addColor(
+      transformMesh(
+        shoulderCap,
+        Mat4.mul(atShoulder, Mat4.translate(-side * shoulderCapInset, 0, 0))
+      ),
+      LAV
+    );
+    const root = Mat4.mul(atShoulder, Mat4.translate(0,-0.25,0));
+    const arm  = addColor(transformMesh(armCyl, root), LAV);
+
+    const wristTilt = Mat4.mul(Mat4.rotZ(side*0.15), Mat4.rotX(-0.14));
+    const fistRoot = Mat4.mul(root, Mat4.mul(Mat4.translate(0,-0.36,0.03), wristTilt));
+    const fist = fistPieces(fistRoot, side);
+    return [cap,arm, ...fist];
+  }
+
+  // KAKI
+  const shinCyl  = createCylinder(50, 0.085, 0.75);
+  const kneeSph  = createSphere(0,0,0);
+  const ankleSph = createSphere(22,22,0);
+  const footSph  = createSphere(24,24,0.22);
+
+  const hipY = -0.98, hipX = 0.1, hipZ = 0.06;
+
+  function makeLeg(side){ 
+    const legRot = Mat4.mul(Mat4.rotZ(side*0.25), Mat4.rotX(0.18)); 
+    const atHip = Mat4.mul(Mat4.translate(side*hipX, hipY, hipZ), legRot);
+
+    // lutut
+    const kneePos = Mat4.mul(atHip, Mat4.translate(0,-0.52,0));
+    const knee = addColor(transformMesh(kneeSph, kneePos), LAV);
+
+    // betis 
+    const shinRoot = Mat4.mul(kneePos, Mat4.mul(Mat4.rotX(-0.05), Mat4.rotZ(side*0.02)));
+    const shin = addColor(transformMesh(shinCyl, Mat4.mul(shinRoot, Mat4.translate(0,-0.25,0))), LAV);
+
+    // pergelangan
+    const anklePos = Mat4.mul(shinRoot, Mat4.translate(0,-0.5,0));
+    const ankle = addColor(transformMesh(ankleSph, anklePos), LAV);
+
+    // kaki/sepatu cokelat
+    const footRoot = anklePos; 
+    const foot = addColor(transformMesh(
+                  footSph,
+                  Mat4.mul(footRoot, Mat4.mul(Mat4.translate(0,-1.65,0.1), Mat4.scale(1.25,0.55,1.80)))
+                ), BROWN);
+    return [ knee, shin, ankle, foot];
+  }
+
+  const leftArm  = makeArm(-1);
+  const rightArm = makeArm( 1);
+  const leftLeg  = makeLeg(-1);
+  const rightLeg = makeLeg( 1);
+
+  // Gabung semua bagian yang tidak akan berubah
+  const staticParts = [
+    head,...horns,eL,eR,pL,pR,p2L,p2R,mouth,neck,torso,
+    shortsL, shortsR
+  ];
+  
+  // Buat buffer untuk bagian statis
+  const staticMesh = makeMesh(gl, mergeMeshesColored(staticParts));
+  
+  // Buat buffer untuk bagian yang akan dianimasikan
+  const leftArmMesh = makeMesh(gl, mergeMeshesColored(leftArm));
+  const rightArmMesh = makeMesh(gl, mergeMeshesColored(rightArm));
+  const leftLegMesh = makeMesh(gl, mergeMeshesColored(leftLeg));
+  const rightLegMesh = makeMesh(gl, mergeMeshesColored(rightLeg));
+
+  gl.disable(gl.CULL_FACE);
+  gl.enable(gl.DEPTH_TEST);
+  gl.clearColor(0.06,0.06,0.08,1);
+
+  // Proyeksi
+  function aspect(){ return (canvas.height? (canvas.width/canvas.height) : (window.innerWidth/window.innerHeight)); }
+
+  const key={}; 
+  window.addEventListener('keydown',e=>{
+    key[e.code]=true;
+    
+    // Tombol 1 untuk animasi berjalan
+    if(e.code === 'Digit1') {
+      if (currentState === 'walking') {
+        currentState = 'idle';
+      } else {
+        currentState = 'walking';
+      }
+      updateStateIndicator();
+    }
+    // Tombol 2 untuk animasi loncat
+    if(e.code === 'Digit2') {
+      if (currentState === 'jumping') {
+        currentState = 'idle';
+      } else {
+        currentState = 'jumping';
+        jumpTime = 0; 
+      }
+      updateStateIndicator();
+    }
+  }); 
+  
+  window.addEventListener('keyup',e=>{
+    key[e.code]=false;
+  });
+  
+  let yaw=0,pitch=0; const speed=1.6*Math.PI/180;
+
+  // Zoom dengan scroll
+  let eyeDist = 3.2;
+  canvas.addEventListener('wheel', (e)=>{
+    e.preventDefault();
+    const scale = Math.exp(e.deltaY * 0.0015);
+    eyeDist = Math.min(10, Math.max(1.2, eyeDist * scale));
+  }, { passive:false });
+
+  let currentState = 'idle';
+  let walkTime = 0;
+  let jumpTime = 0;
+  const walkSpeed = 0.05;
+  const jumpSpeed = 0.02;
+  
+
+  function getWalkTransform(part, side, timeOffset) {
+    const time = walkTime + timeOffset;
+    
+    // Animasi untuk kaki
+    if (part === 'leg') {
+      // Kaki kanan dan kiri bergerak berlawanan fase
+      const phase = side > 0 ? 0 : Math.PI;
+      const swing = Math.sin(time + phase) * 0.4;
+      const lift = Math.max(0, Math.sin(time + phase) * 0.2);
+      
+      return Mat4.mul(
+        Mat4.rotX(swing), // Gerakan maju-mundur
+        Mat4.translate(0, -lift, 0) // Mengangkat kaki
+      );
+    }
+    
+    // Animasi untuk lengan
+    if (part === 'arm') {
+      // Lengan kanan dan kiri bergerak berlawanan fase
+      const phase = side > 0 ? Math.PI : 0;
+      const swing = Math.sin(time + phase) * 0.3;
+      
+      return Mat4.rotX(swing); // Gerakan maju-mundur
+    }
+    
+    return Mat4.I(); 
+  }
+
+  // Animasi Loncat - Seluruh tubuh melompat
+  function getJumpTransform(part, side) {
+    const jumpProgress = Math.min(1, jumpTime);
+    
+    // Gerakan loncat menggunakan kurva parabola
+    let jumpHeight = 0;
+    if (jumpProgress < 0.5) {
+      // Fase naik
+      jumpHeight = Math.sin(jumpProgress * Math.PI) * 0.8;
+    } else {
+      // Fase turun
+      jumpHeight = Math.sin(jumpProgress * Math.PI) * 0.8;
+    }
+    
+    if (part === 'body') {
+      // Seluruh tubuh melompat ke atas
+      return Mat4.translate(0, jumpHeight, 0);
+    }
+    
+    if (part === 'leg') {
+      // Kaki menekuk saat melompat
+      if (jumpProgress < 0.3) {
+        // Fase persiapan - menekuk
+        const bend = jumpProgress * 3.3 * 0.3;
+        return Mat4.rotX(-bend);
+      } else if (jumpProgress < 0.7) {
+        // Fase melayang - kaki lurus
+        const straighten = (jumpProgress - 0.3) * 2.5 * 0.3;
+        return Mat4.rotX(-0.3 + straighten);
+      } else {
+        // Fase mendarat - menekuk lagi
+        const landBend = (jumpProgress - 0.7) * 3.3 * 0.3;
+        return Mat4.rotX(landBend);
+      }
+    }
+    
+    if (part === 'arm') {
+      // Tangan membantu gerakan loncat
+      if (jumpProgress < 0.3) {
+        // Fase persiapan - tangan turun
+        const prep = jumpProgress * 3.3 * 0.2;
+        return Mat4.rotX(-prep);
+      } else if (jumpProgress < 0.5) {
+        // Fase melompat - tangan naik
+        const jumpArm = (jumpProgress - 0.3) * 5 * 0.4;
+        return Mat4.rotX(-0.2 + jumpArm);
+      } else {
+        // Fase turun - tangan turun perlahan
+        const down = (jumpProgress - 0.5) * 2 * 0.6;
+        return Mat4.rotX(0.2 - down);
+      }
+    }
+    
+    return Mat4.I();
+  }
+
+  function draw(){
+    resize();
+    gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+
+    // WASD rotasi kamera
+    if(key['KeyA']) yaw  += speed;
+    if(key['KeyD']) yaw  -= speed;
+    if(key['KeyW']) pitch = Math.min(Math.PI/2, Math.max(-Math.PI/2, pitch + speed));
+    if(key['KeyS']) pitch = Math.min(Math.PI/2, Math.max(-Math.PI/2, pitch - speed));
+
+    // Update waktu animasi berdasarkan state
+    if (currentState === 'walking') {
+      walkTime += walkSpeed;
+      jumpTime = 0;
+    } else if (currentState === 'jumping') {
+      jumpTime += jumpSpeed;
+      if (jumpTime > 1) {
+        // Loop animasi loncat
+        jumpTime = 0;
+      }
+      walkTime = 0;
+    } else {
+      walkTime = 0;
+      jumpTime = 0;
+    }
+
+    const proj=Mat4.perspective(50*Math.PI/180, aspect(), 0.01, 50.0);
+    
+    // Kamera mengelilingi karakter
+    const camX = Math.sin(yaw) * Math.cos(pitch) * eyeDist;
+    const camY = Math.sin(pitch) * eyeDist + 0.45;
+    const camZ = Math.cos(yaw) * Math.cos(pitch) * eyeDist;
+    
+    const view=Mat4.lookAt([camX, camY, camZ],[0,-0.10,0],[0,1,0]);
+
+    gl.uniformMatrix4fv(loc.u_proj,false,new Float32Array(proj));
+    gl.uniformMatrix4fv(loc.u_view,false,new Float32Array(view));
+    gl.uniform3f(loc.u_lightDir,-0.7,1.0,0.6);
+    gl.uniform3f(loc.u_ambient,0.40,0.40,0.40);
+
+    let baseTransform = Mat4.I();
+    if (currentState === 'jumping') {
+      baseTransform = getJumpTransform('body', 0);
+    }
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, staticMesh.posBuf);
+    gl.vertexAttribPointer(loc.a_position,3,gl.FLOAT,false,0,0); gl.enableVertexAttribArray(loc.a_position);
+    gl.bindBuffer(gl.ARRAY_BUFFER, staticMesh.norBuf);
+    gl.vertexAttribPointer(loc.a_normal,3,gl.FLOAT,false,0,0); gl.enableVertexAttribArray(loc.a_normal);
+    gl.bindBuffer(gl.ARRAY_BUFFER, staticMesh.colBuf);
+    gl.vertexAttribPointer(loc.a_color,3,gl.FLOAT,false,0,0); gl.enableVertexAttribArray(loc.a_color);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, staticMesh.idxBuf);
+
+    gl.uniformMatrix4fv(loc.u_model,false,new Float32Array(baseTransform));
+    gl.uniformMatrix3fv(loc.u_normalMat,false,new Float32Array(Mat4.normalMatFromModel(baseTransform)));
+    gl.drawElements(gl.TRIANGLES, staticMesh.count, gl.UNSIGNED_SHORT, 0);
+
+    const animatedParts = [
+      { mesh: leftArmMesh, side: -1, type: 'arm' },
+      { mesh: rightArmMesh, side: 1, type: 'arm' },
+      { mesh: leftLegMesh, side: -1, type: 'leg' },
+      { mesh: rightLegMesh, side: 1, type: 'leg' }
+    ];
+
+    animatedParts.forEach(part => {
+      let animTransform;
+      
+      if (currentState === 'walking') {
+        animTransform = getWalkTransform(part.type, part.side, 0);
+      } else if (currentState === 'jumping') {
+        animTransform = getJumpTransform(part.type, part.side);
+      } else {
+        animTransform = Mat4.I(); 
+      }
+      
+      const modelMatrix = Mat4.mul(baseTransform, animTransform);
+      
+      gl.bindBuffer(gl.ARRAY_BUFFER, part.mesh.posBuf);
+      gl.vertexAttribPointer(loc.a_position,3,gl.FLOAT,false,0,0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, part.mesh.norBuf);
+      gl.vertexAttribPointer(loc.a_normal,3,gl.FLOAT,false,0,0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, part.mesh.colBuf);
+      gl.vertexAttribPointer(loc.a_color,3,gl.FLOAT,false,0,0);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, part.mesh.idxBuf);
+
+      gl.uniformMatrix4fv(loc.u_model,false,new Float32Array(modelMatrix));
+      gl.uniformMatrix3fv(loc.u_normalMat,false,new Float32Array(Mat4.normalMatFromModel(modelMatrix)));
+      gl.drawElements(gl.TRIANGLES, part.mesh.count, gl.UNSIGNED_SHORT, 0);
+    });
+
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+});
+</script>
+</body>
+</html>

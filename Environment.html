@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Champion’s Ring Arena</title>
+  <style>
+    body {
+      margin: 0;
+      background: radial-gradient(circle at center, #0a0a0a 0%, #000 80%);
+      color: white;
+      font-family: 'Poppins', sans-serif;
+      overflow: hidden;
+      perspective: 1200px;
+    }
+
+    /* INTRO */
+    #intro {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: black;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 3em;
+      font-weight: bold;
+      color: #fdd835;
+      text-shadow: 0 0 40px #fdd835, 0 0 80px #ffea00;
+      animation: fadeOut 3s ease 2s forwards;
+      z-index: 100;
+    }
+
+    @keyframes fadeOut {
+      to { opacity: 0; visibility: hidden; }
+    }
+
+    /* ARENA */
+    .arena {
+      width: 100%;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-end;
+      position: relative;
+      transform-style: preserve-3d;
+      animation: subtleTilt 12s infinite ease-in-out alternate;
+    }
+
+    @keyframes subtleTilt {
+      0% { transform: rotateX(12deg) rotateY(0deg); }
+      50% { transform: rotateX(14deg) rotateY(5deg); }
+      100% { transform: rotateX(12deg) rotateY(-5deg); }
+    }
+
+    /* LANTAI */
+    .floor {
+      width: 80%;
+      height: 200px;
+      background: radial-gradient(circle at center, #222 0%, #111 60%, #000 100%);
+      border-radius: 25px;
+      box-shadow:
+        inset 0 0 50px rgba(255,255,255,0.05),
+        inset 0 0 80px rgba(255,255,255,0.08),
+        0 60px 150px rgba(0,0,0,0.9);
+      transform: rotateX(60deg);
+      position: relative;
+      bottom: 100px;
+      overflow: hidden;
+    }
+
+    /* SPOTLIGHT */
+    .floor::before {
+      content: "";
+      position: absolute;
+      top: -40%;
+      left: 30%;
+      width: 40%;
+      height: 200%;
+      background: radial-gradient(circle, rgba(255,255,150,0.3) 0%, transparent 70%);
+      filter: blur(50px);
+      animation: spotlightMove 6s infinite alternate ease-in-out;
+    }
+
+    @keyframes spotlightMove {
+      0% { left: 20%; opacity: 0.6; }
+      100% { left: 50%; opacity: 0.8; }
+    }
+
+    .podium {
+  position: absolute;
+  bottom: 220px; /* sebelumnya 140px → dinaikkan */
+  width: 180px;
+  height: 40px;
+  background: linear-gradient(to top, #b8860b, #fdd835);
+  border-radius: 10px;
+  box-shadow: 0 10px 25px rgba(255, 215, 0, 0.7);
+  transform: translateZ(80px); /* lebih menonjol */
+  transition: all 0.8s ease;
+  opacity: 0;
+  transform: scale(0.8) translateY(50px);
+}
+
+.floor {
+  width: 80%;
+  height: 140px; /* sedikit lebih tipis */
+  background: linear-gradient(145deg, #333, #111);
+  border-radius: 20px;
+  box-shadow: inset 0 0 40px rgba(255,255,255,0.1),
+              0 30px 100px rgba(0,0,0,0.9);
+  transform: rotateX(60deg) translateY(20px); /* garis gelapnya mundur */
+  position: relative;
+  bottom: 100px;
+}
+
+
+    /* HERO FRAME */
+    iframe {
+      position: absolute;
+      width: 200px;
+      height: 200px;
+      border: none;
+      bottom: 180px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px) scale(0.8);
+      transition: opacity 1s ease, transform 1s ease;
+      opacity: 0;
+      pointer-events: none;
+      filter: drop-shadow(0 0 20px rgba(255, 255, 120, 0.4))
+              drop-shadow(0 0 40px rgba(255, 200, 50, 0.3));
+    }
+
+    iframe.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(-10px) scale(1);
+      pointer-events: all;
+      animation: floaty 3s ease-in-out infinite alternate;
+    }
+
+    @keyframes floaty {
+      from { transform: translateX(-50%) translateY(-10px) scale(1); }
+      to { transform: translateX(-50%) translateY(10px) scale(1.05); }
+    }
+
+    /* HERO SELECTOR */
+    .selector {
+      position: absolute;
+      bottom: 30px;
+      display: flex;
+      gap: 20px;
+      z-index: 10;
+      backdrop-filter: blur(8px);
+      background: rgba(0,0,0,0.3);
+      padding: 10px 25px;
+      border-radius: 20px;
+      box-shadow: 0 0 15px rgba(255, 215, 0, 0.2);
+    }
+
+    .selector button {
+      background: linear-gradient(145deg, #222, #111);
+      color: #fdd835;
+      border: 2px solid #fdd835;
+      border-radius: 8px;
+      padding: 10px 25px;
+      font-size: 1em;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s;
+      text-shadow: 0 0 8px rgba(255,255,150,0.5);
+    }
+
+    .selector button:hover {
+      background: #fdd835;
+      color: #111;
+      box-shadow: 0 0 25px #fdd835, 0 0 40px rgba(255,255,150,0.6);
+      transform: translateY(-2px) scale(1.05);
+    }
+  </style>
+</head>
+<body>
+
+  <div id="intro">WELCOME TO THE CHAMPION’S RING</div>
+
+  <div class="arena" id="arena">
+    <div class="floor"></div>
+    <div class="selector">
+      <button data-hero="all">All Heroes</button>
+      <button data-hero="tyrogue">Tyrogue</button>
+      <button data-hero="hitmonlee">Hitmonlee</button>
+      <button data-hero="hitmonchan">Hitmonchan</button>
+      <button data-hero="hitmontop">Hitmontop</button>
+    </div>
+  </div>
+
+  <script>
+    const arena = document.getElementById('arena');
+    const heroes = {
+      tyrogue: 'Tyrogue.html',
+      hitmonlee: 'Hitmonlee.html',
+      hitmonchan: 'Hitmonchan.html',
+      hitmontop: 'Hitmontop.html'
+    };
+
+    const clearArena = () => {
+      document.querySelectorAll('.podium, iframe').forEach(el => el.remove());
+    };
+
+    const summonHero = (heroName, xPos) => {
+      const podium = document.createElement('div');
+      podium.className = 'podium';
+      podium.style.left = `${xPos}px`;
+      arena.appendChild(podium);
+      setTimeout(() => podium.classList.add('show'), 100);
+
+      const frame = document.createElement('iframe');
+      frame.src = heroes[heroName];
+      frame.style.left = `${xPos + 90}px`;
+      arena.appendChild(frame);
+      setTimeout(() => frame.classList.add('show'), 600);
+    };
+
+    document.querySelectorAll('.selector button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const hero = btn.dataset.hero;
+        clearArena();
+
+        if (hero === 'all') {
+          const screenW = window.innerWidth;
+          const positions = [
+            screenW * 0.18 - 90,
+            screenW * 0.38 - 90,
+            screenW * 0.58 - 90,
+            screenW * 0.78 - 90
+          ];
+          const heroList = Object.keys(heroes);
+          heroList.forEach((h, i) => summonHero(h, positions[i]));
+        } else {
+          summonHero(hero, window.innerWidth / 2 - 120);
+        }
+      });
+    });
+  </script>
+
+</body>
+</html>
